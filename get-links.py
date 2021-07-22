@@ -5,12 +5,12 @@
 # and put it in a properly labeled file.
 
 import sys
-from typing import List, Tuple
+from typing import Any, List, Tuple
 import argparse
 import datetime
 import logging
-# TODO: Use SQLite3 for storing the data.
 import sqlite3
+import json
 import glob
 import enum
 import io
@@ -19,7 +19,7 @@ import re
 
 
 logging.basicConfig(level=logging.DEBUG,
-                    format="%(asctime)s [%(name)s] %(levelname)s: %(msg)s")
+                    format="%(asctime)s [%(name)s] %(levelname)8s: %(msg)s")
 
 
 class LinkType(enum.Enum):
@@ -63,6 +63,16 @@ class LinkData:
             # After a few tests, you need the '.png'. (it can only be a few different suffixes)
             return f"https://i.imgur.com/{self.specific_id}.png"
         raise ValueError("Invalid link type.")
+
+    def to_json_serializable(self) -> dict:
+        """
+        Returns the link data as something that can be JSON serialized.
+        """
+        out = self.__dict__
+        out['raw_link'] = self.raw_link()
+        out["type"] = self.type.value
+        out["date"] = self.date.isoformat()
+        return out
 
 
 def get_logfile_info(path: str) -> Tuple[str, datetime.date]:
@@ -125,7 +135,7 @@ def get_links(logfile: str) -> List[LinkData]:
         try:
             lines = f.readlines()
         except UnicodeDecodeError:
-            print(f"Unable to decode file '{logfile}'. - Skipping")
+            logging.info(f"Unable to decode file '{logfile}'. - Skipping")
     for line in lines:
         # Comments, things like noting logging start time and timezone.
         if line.startswith('#'):
@@ -142,8 +152,8 @@ def get_links(logfile: str) -> List[LinkData]:
             except ValueError:
                 # This can happen when the line isnt properly formatted
                 # As chatterino seems to sometimes absolutely FUCK the output lol
-                logging.warning("Unable to parse line: " +
-                                line.replace('\n', ''))
+                logging.debug("Unable to parse line: " +
+                              line.replace('\n', ''))
                 continue
 
             if user.count(" ") != 0:
@@ -186,10 +196,11 @@ def get_all_files(channels: List[str], logs_dir: str) -> List[List[str]]:
     return all_files
 
 
-def filter_links(links: List[LinkData]):
+def filter_and_format_links(links: List[LinkData]):
     newLinks: List[LinkData] = []
 
     for link in links:
+        # Filtering:
         if link.specific_id == "a" and link.type == LinkType("imgur.com"):
             # These are weird links, they are in the form
             # "https://imgur.com/a/Some_ID"
@@ -202,6 +213,13 @@ def filter_links(links: List[LinkData]):
             # Same case as above but links are in the form
             # "https://imgur.com/gallery/Gallery_ID"
             continue
+
+        if link.specific_id == "upload":
+            # This is just the uplaod URL
+            continue
+
+        # Formatting:
+        link.message = link.message.replace('\n', '')
 
         newLinks.append(link)
 
@@ -216,11 +234,11 @@ def get_all_links(channels: List[LinkData], logs_dir: str) -> List[LinkData]:
         for file in all_files[i]:
             links.extend(get_links(file))
 
-    return filter_links(links)
+    return filter_and_format_links(links)
 
 
-def save_links(links: List[LinkData], out_file: str):
-    conn = sqlite3.connect(out_file)
+def save_links_db(links: List[LinkData], args: dict) -> int:
+    conn = sqlite3.connect(args['out_file'])
     cur = conn.cursor()
     # Create an enum because those dont exist in sqlite3
     cur.execute(
@@ -266,40 +284,78 @@ def save_links(links: List[LinkData], out_file: str):
     return cursor.rowcount
 
 
-def main(args):
-    """
-    args should have the properties 'channels' - a list of channels,
-    'logs_dir' - the logs directory, and
-    'out_file' - the output file
-    """
-    channels: List[str] = [i.lower() for i in args.channels]
+def save_links_json(links: List[LinkData], args: dict) -> int:
+    kwargs = {}
+    if args['file_format'] == "pretty-json":
+        kwargs['indent'] = 4
+
+    output_obj = {
+        'total': len(links),
+        'created': datetime.datetime.now().isoformat(),
+        'channels': args['channels'],
+        'links': [link.to_json_serializable() for link in links]
+    }
+
+    json.dump(output_obj,
+              fp=open(args['out_file'], "w"), **kwargs)
+
+    return len(links)
+
+
+def save_links(links: List[LinkData], args: dict):
+    if args['file_format'] == "sql":
+        return save_links_db(links, args)
+    elif args['file_format'].count("json") > 0:
+        return save_links_json(links, args)
+
+
+def verify_args(args: Any) -> dict:
     logs_dir: str = os.path.abspath(args.logs_dir)
     if not os.path.exists(logs_dir):
         raise FileNotFoundError(f"Logs directory '{logs_dir}' does not exist.")
 
+    channels = [i.lower() for i in args.channels]
     for channel in channels:
         if channel.count("*") != 0:
             channelsGlob = os.path.join(
                 logs_dir, "Twitch", "Channels", channel)
-            print(f"Channels captured from '{channel}':",
-                  [os.path.basename(i) for i in glob.glob(channelsGlob)])
+            logging.info(f"Channels captured from '{channel}':   " +
+                         ",  ".join([os.path.basename(i) for i in glob.glob(channelsGlob)]))
 
-    out_file: str = os.path.abspath(
-        args.out_file if args.out_file is not None else './images.db')
+    return {
+        'channels': channels,
+        'skip_prompt': args.skip_prompt,
+        'file_format': args.file_format.lower(),
+        'out_file': os.path.abspath(
+            args.out_file if args.out_file is not None else './images.db' if args.file_format.lower() == "sql" else "./images.json"),
+        'logs_dir': logs_dir
+    }
 
-    links = get_all_links(channels, logs_dir)
-    print(f"Total number of links: {len(links)}")
-    answer = "\xb1"  # ESC
-    while answer.lower() not in ["y", ""]:
-        answer = input(
-            f"Would like to write all {len(links)} to an SQL database at '{out_file}' (Y/n): ")
-        if answer.lower() == "n":
-            print("Aborting.")
-            sys.exit(0)
 
-    print(links)
-    rowid = save_links(links, out_file)
-    print(f"Saved up to {rowid}.")
+def main(args):
+    """
+    Get imgur links from twitch chat logs created from chatterino.
+    """
+    args = verify_args(args)
+
+    links = get_all_links(args['channels'], args['logs_dir'])
+    logging.info(f"Total number of links: {len(links)}")
+
+    if len(links) >= 1000:
+        answer = "some random dummy data"
+        while not args['skip_prompt'] and answer.lower() not in ["yes", "y", ""]:
+            filetype = "an SQLite3 database"
+            if args["file_format"].count("json") > 0:
+                filetype = args["file_format"]
+            answer = input(
+                f"Write all {len(links)} links as {filetype} to '{args['out_file']}' (Y/n): ")
+            if answer.lower() in ["n", "no"]:
+                logging.critical("Aborting.")
+                sys.exit(0)
+
+    number_saved = save_links(links, args)
+    logging.info(
+        f"Saved {number_saved if type(number_saved) == int else 0} as {args['file_format']} to {os.path.basename(args['out_file'])}.")
 
 
 parser = argparse.ArgumentParser(
@@ -311,8 +367,22 @@ parser.add_argument("-l", "--logs-dir",
                     required=False,
                     dest='logs_dir'
                     )
+parser.add_argument("-y", "--yes",
+                    help="When prompted for anything, assume yes.",
+                    action='store_true',
+                    default=False,
+                    required=False,
+                    dest='skip_prompt'
+                    )
+parser.add_argument("-f", "--format",
+                    help="Output file format. Can be either 'sql' (sqlite3) or 'json'. Default 'sql'.",
+                    default='sql',
+                    choices=['pretty-json', 'json', 'sql'],
+                    required=False,
+                    dest='file_format'
+                    )
 parser.add_argument("-o", "--output",
-                    help="The file to store the output in. Default './images.db'. (sqlite3 database)",
+                    help="The file to store the output in. Default './images.db' or './images.json'.",
                     required=False,
                     dest='out_file'
                     )

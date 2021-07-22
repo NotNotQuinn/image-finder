@@ -6,6 +6,8 @@ Twitch
 
 # Database files.
 *.db
+*.json
 
-# Unrelated file I have
+# Unrelated files I have
+extras
 PepePls.txt
