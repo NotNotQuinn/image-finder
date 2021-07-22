@@ -2,6 +2,10 @@
 Channels
 Mentions
 Whispers
+Twitch
+
+# Database files.
+*.db
 
 # Unrelated file I have
 PepePls.txt
