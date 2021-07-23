@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # This script will go through one or more channels,
-# and get all the imgur links that have been posted in it
+# and get all the image links that have been posted in it
 # and put it in a properly labeled file.
 
 import sys
@@ -18,12 +18,14 @@ import os
 import re
 
 
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(name)s] %(levelname)8s: %(msg)s")
 
 
 class LinkType(enum.Enum):
     Imgur = 'imgur.com'
+    Gyazo = 'gyazo.com'
+    Nuuls = 'nuuls.com'
 
 
 class LinkData:
@@ -60,8 +62,13 @@ class LinkData:
 
     def raw_link(self) -> str:
         if self.type == LinkType.Imgur:
-            # After a few tests, you need the '.png'. (it can only be a few different suffixes)
+            # The '.png' is needed, only tested on imgur.  And if its a gif
+            # or something it will still return the proper data (eg. a gif not png)
             return f"https://i.imgur.com/{self.specific_id}.png"
+        elif self.type == LinkType.Gyazo:
+            return f"https://i.gyazo.com/{self.specific_id}.png"
+        elif self.type == LinkType.Nuuls:
+            return f"https://i.nuuls.com/{self.specific_id}.png"
         raise ValueError("Invalid link type.")
 
     def to_json_serializable(self) -> dict:
@@ -120,7 +127,6 @@ def parse_line(line: str, asumeDate: datetime.date) -> Tuple[str, str, datetime.
 def get_links(logfile: str) -> List[LinkData]:
     """
     Get all image links present from log file.
-    Note: only support imgur links.
     """
     links: List[LinkData] = []
     channel, fileDate = get_logfile_info(logfile)
@@ -128,14 +134,15 @@ def get_links(logfile: str) -> List[LinkData]:
     linkRegex = re.compile(
         # When updating: Group 3 must be the host name, and group 4 be the specific ID.
         # If possible move to named capture groups but I couldnt get those to work.
-        r"(https?://)?(i\.)?(imgur\.com)/(\w*)(\.\w*)?"
+        r"(https?://)?(i\.)?(imgur\.com|gyazo\.com|(?<=i\.)nuuls\.com)/([\w\-]*)(\.\w*)?"
     )
     lines = []
     with io.open(logfile, "r", encoding='utf-8') as f:
         try:
             lines = f.readlines()
         except UnicodeDecodeError:
-            logging.info(f"Unable to decode file '{logfile}'. - Skipping")
+            logging.info(
+                f"Unable to decode file '{os.path.basename(logfile)}'. - Skipping")
     for line in lines:
         # Comments, things like noting logging start time and timezone.
         if line.startswith('#'):
@@ -196,26 +203,26 @@ def get_all_files(channels: List[str], logs_dir: str) -> List[List[str]]:
     return all_files
 
 
-def filter_and_format_links(links: List[LinkData]):
+def filter_and_format_links(links: List[LinkData]) -> List[LinkData]:
+    """Filters & formats links.
+    """
     newLinks: List[LinkData] = []
 
     for link in links:
         # Filtering:
-        if link.specific_id == "a" and link.type == LinkType("imgur.com"):
-            # These are weird links, they are in the form
-            # "https://imgur.com/a/Some_ID"
-            # The ID is completely seperate from the images inside the list
-            # So the data would only be useful if we make an API call
-            # And I do not feel like doing that.
+        if link.specific_id == "a" and link.type == LinkType.Imgur:
+            # List of images "https://imgur.com/a/Some_ID"
             continue
 
-        if link.specific_id == "gallery" and link.type == LinkType("imgur.com"):
-            # Same case as above but links are in the form
-            # "https://imgur.com/gallery/Gallery_ID"
+        if link.specific_id == "gallery" and link.type == LinkType.Imgur:
+            # List of images "https://imgur.com/gallery/Gallery_ID"
             continue
 
-        if link.specific_id == "upload":
-            # This is just the uplaod URL
+        if link.specific_id == "upload" and link.type == LinkType.Imgur:
+            continue
+
+        if link.specific_id == "thumb" and link.type == LinkType.Gyazo:
+            # Different sizes "https://i.gyazo.com/thumb/1200/IMAGE_ID-png.jpg"
             continue
 
         # Formatting:
@@ -240,10 +247,6 @@ def get_all_links(channels: List[LinkData], logs_dir: str) -> List[LinkData]:
 def save_links_db(links: List[LinkData], args: dict) -> int:
     conn = sqlite3.connect(args['out_file'])
     cur = conn.cursor()
-    # Create an enum because those dont exist in sqlite3
-    cur.execute(
-        'CREATE TABLE IF NOT EXISTS `image_types_enum` (Name VARCHAR(50))')
-    cur.execute('INSERT INTO `image_types_enum` (Name) VALUES ("imgur.com")')
     # Create table
     cur.execute(
         """
@@ -256,8 +259,7 @@ def save_links_db(links: List[LinkData], args: dict) -> int:
             `Date_Posted` DATETIME NOT NULL,
             `User_Posted` VARCHAR(50) NOT NULL,
             `Channel_Posted` VARCHAR(50) NOT NULL,
-            `Message_Text` TEXT NOT NULL,
-            FOREIGN KEY (`Link_Type`) REFERENCES `image_types_enum` (`Name`)
+            `Message_Text` TEXT NOT NULL
         )
         ;
         """
@@ -276,7 +278,8 @@ def save_links_db(links: List[LinkData], args: dict) -> int:
         INSERT OR REPLACE INTO `images` (
             Specific_ID, Link, Link_Type, Raw_Link, Date_Posted, User_Posted, Channel_Posted, Message_Text
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [(link.specific_id, link.link, link.type.value, link.raw_link(), link.date.isoformat(), link.user, link.channel, link.message.replace('\n', '').replace('\r', '')) for link in links])
+        """, [(link.specific_id, link.link, link.type.value, link.raw_link(), link.date.isoformat(), link.user, link.channel, link.message.replace('\n', '').replace('\r', '')) for link in links]
+    )
 
     # Bruh I forgot to do this and I was debugging for like 20 mins
     cursor.fetchall()
@@ -334,7 +337,7 @@ def verify_args(args: Any) -> dict:
 
 def main(args):
     """
-    Get imgur links from twitch chat logs created from chatterino.
+    Get image links from twitch chat logs created from chatterino.
     """
     args = verify_args(args)
 
@@ -359,7 +362,8 @@ def main(args):
 
 
 parser = argparse.ArgumentParser(
-    description='Get imgur links from twitch chat logs created from chatterino.'
+    description='Get image links from twitch chat logs created from chatterino.',
+    epilog='When saving 1000 or more image links there is a confirmation prompt.'
 )
 parser.add_argument("-l", "--logs-dir",
                     help="The directory of chatterino logs. Should contain folder 'Twitch'.  Default is '.'.",
@@ -375,7 +379,7 @@ parser.add_argument("-y", "--yes",
                     dest='skip_prompt'
                     )
 parser.add_argument("-f", "--format",
-                    help="Output file format. Can be either 'sql' (sqlite3) or 'json'. Default 'sql'.",
+                    help="Output file format. Default 'sql' (sqlite3).",
                     default='sql',
                     choices=['pretty-json', 'json', 'sql'],
                     required=False,
