@@ -4,6 +4,8 @@ Finds image links in chatterino logs.
 
 This script will find image links and related data about them, and put them into either a JSON file, or a SQLite3 database (default).
 
+Only tested on windows, if there is any problems on another platform let me know and I will try to fix it.
+
 ## Usage
 
 To get images from channel `foo` and all channels that start with `bar`. In a pretty JSON format.
