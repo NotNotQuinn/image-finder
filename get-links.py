@@ -4,7 +4,6 @@
 # and get all the image links that have been posted in it
 # and put it in a properly labeled file.
 
-import sys
 from typing import Any, List, Tuple
 import argparse
 import datetime
@@ -13,13 +12,10 @@ import sqlite3
 import json
 import glob
 import enum
+import sys
 import io
 import os
 import re
-
-
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(name)s] %(levelname)8s: %(msg)s")
 
 
 class LinkType(enum.Enum):
@@ -361,43 +357,49 @@ def main(args):
         f"Saved {number_saved if type(number_saved) == int else 0} as {args['file_format']} to {os.path.basename(args['out_file'])}.")
 
 
-parser = argparse.ArgumentParser(
-    description='Get image links from twitch chat logs created from chatterino.',
-    epilog='When saving 1000 or more image links there is a confirmation prompt.'
-)
-parser.add_argument("-l", "--logs-dir",
-                    help="The directory of chatterino logs. Should contain folder 'Twitch'.  Default is '.'.",
-                    default=".",
-                    required=False,
-                    dest='logs_dir'
-                    )
-parser.add_argument("-y", "--yes",
-                    help="When prompted for anything, assume yes.",
-                    action='store_true',
-                    default=False,
-                    required=False,
-                    dest='skip_prompt'
-                    )
-parser.add_argument("-f", "--format",
-                    help="Output file format. Default 'sql' (sqlite3).",
-                    default='sql',
-                    choices=['pretty-json', 'json', 'sql'],
-                    required=False,
-                    dest='file_format'
-                    )
-parser.add_argument("-o", "--output",
-                    help="The file to store the output in. Default './images.db' or './images.json'.",
-                    required=False,
-                    dest='out_file'
-                    )
-parser.add_argument("-c", "--channels",
-                    help="One or more channels to get links from.",
-                    required=True,
-                    nargs='+',
-                    metavar="CHANNEL"
-                    )
+def get_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description='Get image links from twitch chat logs created from chatterino.',
+        epilog='When saving 1000 or more image links there is a confirmation prompt.'
+    )
+    parser.add_argument("-l", "--logs-dir",
+                        help="The directory of chatterino logs. Should contain folder 'Twitch'.  Default is '.'.",
+                        default=".",
+                        required=False,
+                        dest='logs_dir'
+                        )
+    parser.add_argument("-y", "--yes",
+                        help="When prompted for anything, assume yes.",
+                        action='store_true',
+                        default=False,
+                        required=False,
+                        dest='skip_prompt'
+                        )
+    parser.add_argument("-f", "--format",
+                        help="Output file format. Default 'sql' (sqlite3).",
+                        default='sql',
+                        choices=['pretty-json', 'json', 'sql'],
+                        required=False,
+                        dest='file_format'
+                        )
+    parser.add_argument("-o", "--output",
+                        help="The file to store the output in. Default './images.db' or './images.json'.",
+                        required=False,
+                        dest='out_file'
+                        )
+    parser.add_argument("-c", "--channels",
+                        help="One or more channels to get links from.",
+                        required=True,
+                        nargs='+',
+                        metavar="CHANNEL"
+                        )
+    return parser
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(name)s] %(levelname)8s: %(msg)s")
+
+    parser = get_arg_parser()
     args = parser.parse_args()
     main(args)
