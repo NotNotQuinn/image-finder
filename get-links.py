@@ -290,7 +290,7 @@ def save_links_db(links: List[LinkData], args: dict) -> int:
 def save_links_json(links: List[LinkData], args: dict) -> int:
     kwargs = {}
     if args['file_format'] == "pretty-json":
-        kwargs['indent'] = 4
+        kwargs['indent'] = 2
 
     output_obj = {
         'total': len(links),
